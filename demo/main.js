@@ -23,6 +23,7 @@ let hls,
     levelCapping = JSON.parse(getURLParam('levelCapping', -1)),
     defaultAudioCodec = getURLParam('defaultAudioCodec', undefined),
     widevineLicenseUrl = getURLParam('widevineLicenseURL', undefined),
+    isHighBandwidth = JSON.parse(getURLParam('isHighBandwidth', false)),
     dumpfMP4 = getURLParam('dumpfMP4', false);
 
 let video = $('#video')[0];
@@ -79,6 +80,11 @@ $(document).ready(function() {
     updatePermalink();
   });
 
+  $('#isHighBandwidth').click(function() {
+    isHighBandwidth = this.checked;
+    updatePermalink();
+  });
+
   $('#dumpfMP4').click(function() {
     dumpfMP4 = this.checked;
     updatePermalink();
@@ -97,6 +103,7 @@ $(document).ready(function() {
   $('#enableStreaming').prop( 'checked', enableStreaming );
   $('#autoRecoverError').prop( 'checked', autoRecoverError );
   $('#enableWorker').prop( 'checked', enableWorker );
+  $('#isHighBandwidth').prop( 'checked', isHighBandwidth );
   $('#dumpfMP4').prop( 'checked', dumpfMP4 );
   $('#levelCapping').val(levelCapping);
   $('#defaultAudioCodec').val(defaultAudioCodec || 'undefined');
@@ -171,6 +178,7 @@ function loadSelectedStream() {
     const hlsConfig = {
       debug            : true,
       enableWorker     : enableWorker,
+      isHighBandwidth  : isHighBandwidth,
       defaultAudioCodec: defaultAudioCodec,
       widevineLicenseUrl: widevineLicenseUrl
     };
@@ -1099,6 +1107,7 @@ function updatePermalink() {
                     '&enableStreaming=' + enableStreaming +
                     '&autoRecoverError=' + autoRecoverError +
                     '&enableWorker=' + enableWorker +
+                    '&isHighBandwidth=' + isHighBandwidth +
                     '&dumpfMP4=' + dumpfMP4 +
                     '&levelCapping=' + levelCapping +
                     '&defaultAudioCodec=' + defaultAudioCodec +

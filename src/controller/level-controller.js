@@ -358,6 +358,15 @@ export default class LevelController extends EventHandler {
         const targetdurationMs = 1000 * (newDetails.averagetargetduration ? newDetails.averagetargetduration : newDetails.targetduration);
         let reloadInterval = targetdurationMs,
           curDetails = curLevel.details;
+        if (newDetails.fragments.length > 0) {
+          const latestFrag = newDetails.fragments[newDetails.fragments.length - 1];
+          // in low latency mode, it needs to reload in minium target duration
+          const lowLatencyEnabled = latestFrag.inProgress;
+          if (this.hls.lowLatencyEnabled !== lowLatencyEnabled)
+            this.hls.lowLatencyEnabled = lowLatencyEnabled;
+          if (lowLatencyEnabled)
+            reloadInterval = 1000 * latestFrag.duration;
+        }
         if (curDetails && newDetails.endSN === curDetails.endSN) {
           // follow HLS Spec, If the client reloads a Playlist file and finds that it has not
           // changed then it MUST wait for a period of one-half the target
@@ -367,8 +376,10 @@ export default class LevelController extends EventHandler {
         }
         // decrement reloadInterval with level loading delay
         reloadInterval -= performance.now() - data.stats.trequest;
-        // in any case, don't reload more than half of target duration
-        reloadInterval = Math.max(targetdurationMs / 2, Math.round(reloadInterval));
+        if (!this.hls.lowLatencyEnabled) {
+          // in any case, don't reload more than half of target duration
+          reloadInterval = Math.max(targetdurationMs / 2, Math.round(reloadInterval));
+        }
         logger.log(`live playlist, reload in ${Math.round(reloadInterval)} ms`);
         this.timer = setTimeout(() => this.loadLevel(), reloadInterval);
       } else {

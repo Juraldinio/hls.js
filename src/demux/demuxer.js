@@ -91,7 +91,7 @@ class Demuxer {
     }
   }
 
-  push (data, initSegment, audioCodec, videoCodec, frag, duration, accurateTimeOffset, defaultInitPTS) {
+  append (data, initSegment, audioCodec, videoCodec, frag, duration, accurateTimeOffset, defaultInitPTS, lowLatency) {
     const w = this.w;
     const timeOffset = !isNaN(frag.startDTS) ? frag.startDTS : frag.start;
     const decryptdata = frag.decryptdata;
@@ -99,7 +99,8 @@ class Demuxer {
     const discontinuity = !(lastFrag && (frag.cc === lastFrag.cc));
     const trackSwitch = !(lastFrag && (frag.level === lastFrag.level));
     const nextSN = lastFrag && (frag.sn === (lastFrag.sn + 1));
-    const contiguous = !trackSwitch && nextSN;
+    const sameSN = lastFrag && (frag.sn === (lastFrag.sn));
+    const contiguous = !trackSwitch && (nextSN || sameSN);
     if (discontinuity)
       logger.log(`${this.id}:discontinuity detected`);
 
@@ -109,11 +110,22 @@ class Demuxer {
     this.frag = frag;
     if (w) {
       // post fragment payload as transferable objects for ArrayBuffer (no copy)
-      w.postMessage({ cmd: 'demux', data, decryptdata, initSegment, audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS }, data instanceof ArrayBuffer ? [data] : []);
+      w.postMessage({ cmd: 'demux', data, decryptdata, initSegment, audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS, lowLatency }, data instanceof ArrayBuffer ? [data] : []);
     } else {
       let demuxer = this.demuxer;
       if (demuxer)
-        demuxer.push(data, decryptdata, initSegment, audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS);
+        demuxer.append(data, decryptdata, initSegment, audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS, lowLatency);
+    }
+  }
+
+  notifycomplete () {
+    let w = this.w;
+    if (w) {
+      w.postMessage({ cmd: 'complete' });
+    } else {
+      let demuxer = this.demuxer;
+      if (demuxer)
+        demuxer.notifycomplete();
     }
   }
 

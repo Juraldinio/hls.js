@@ -34,12 +34,14 @@ const RemuxerTrackIdConfig = {
 };
 
 class TSDemuxer {
-  constructor (observer, remuxer, config, typeSupported) {
+  constructor (observer, remuxer, config, typeSupported, vendor) {
     this.observer = observer;
     this.config = config;
     this.typeSupported = typeSupported;
     this.remuxer = remuxer;
     this.sampleAes = null;
+    const userAgent = navigator.userAgent;
+    this.isSafari = vendor && vendor.indexOf('Apple') > -1 && userAgent && !userAgent.match('CriOS');
   }
 
   setDecryptData (decryptdata) {
@@ -124,6 +126,9 @@ class TSDemuxer {
     this.audioCodec = audioCodec;
     this.videoCodec = videoCodec;
     this._duration = duration;
+    this.data = [];
+    this.len = 0;
+    this.contiguous = true;
   }
 
   /**
@@ -133,11 +138,23 @@ class TSDemuxer {
   resetTimeStamp () {}
 
   // feed incoming data to the front of the parsing pipeline
-  append (data, timeOffset, contiguous, accurateTimeOffset) {
-    let start, len = data.length, stt, pid, atf, offset, pes,
-      unknownPIDs = false;
-    this.contiguous = contiguous;
-    let pmtParsed = this.pmtParsed,
+  append (dataIn, timeOffset, contiguous, accurateTimeOffset, lowLatency) {
+    this.timeOffset = timeOffset;
+    if (this.contiguous)
+      this.contiguous = contiguous;
+    this.accurateTimeOffset = accurateTimeOffset;
+    this.lowLatency = lowLatency;
+    // console.log(`trailer/arrayLen/in:${this.len}/${this.data.length}/${dataIn.length}`);
+    if (this.len === 0 && dataIn.length > 3 * 188) {
+      const syncOffset = TSDemuxer._syncOffset(dataIn);
+      this.data.push({ start: syncOffset, data: dataIn });
+    } else {
+      this.data.push({ start: 0, data: dataIn });
+    }
+    this.len += dataIn.length;
+    let len = this.len, stt, pid, atf, offset, pes,
+      unknownPIDs = false,
+      pmtParsed = this.pmtParsed,
       avcTrack = this._avcTrack,
       audioTrack = this._audioTrack,
       id3Track = this._id3Track,
@@ -156,13 +173,49 @@ class TSDemuxer {
       parseMPEGPES = this._parseMPEGPES.bind(this),
       parseID3PES = this._parseID3PES.bind(this);
 
-    const syncOffset = TSDemuxer._syncOffset(data);
-
     // don't parse last TS packet if incomplete
-    len -= (len + syncOffset) % 188;
+    if (len < 188)
+      return;
+
+    let dataObject = this.data.shift(),
+      data = dataObject.data,
+      start = dataObject.start,
+      i = 0;
 
     // loop through TS packets
-    for (start = syncOffset; start < len; start += 188) {
+    for (i = 0; i + 188 <= len; i += 188, start += 188) {
+      if ((start + 188) > data.length) {
+        // console.log(`${start}/${start+188}/${data.length}`);
+        if (start < data.length) {
+          let remainingLen = data.length - start,
+            neededLen = 188 - remainingLen,
+            nextChunk = this.data[0],
+            appendedLen = Math.min(nextChunk.data.length, neededLen),
+            newData = new Uint8Array(remainingLen + appendedLen);
+          newData.set(data.subarray(start));
+          if (nextChunk) {
+            newData.set(nextChunk.data.subarray(0, appendedLen), remainingLen);
+            if (newData.length === 188)
+              nextChunk.start = appendedLen;
+            else
+              this.data.shift();
+            data = newData;
+            start = 0;
+          }
+        } else {
+          data = this.data.shift();
+          if (data) {
+            start = data.start;
+            data = data.data;
+          }
+        }
+      }
+
+      if (start + 188 > data.length) {
+        i -= 188;
+        start -= 188;
+        continue;
+      }
       if (data[start] === 0x47) {
         stt = !!(data[start + 1] & 0x40);
         // pid is a 13-bit field starting at the last bit of TS[1]
@@ -182,7 +235,6 @@ class TSDemuxer {
           if (stt) {
             if (avcData && (pes = parsePES(avcData)) && pes.pts !== undefined)
               parseAVCPES(pes, false);
-
             avcData = { data: [], size: 0 };
           }
           if (avcData) {
@@ -207,9 +259,8 @@ class TSDemuxer {
           break;
         case id3Id:
           if (stt) {
-            if (id3Data && (pes = parsePES(id3Data)) && pes.pts !== undefined)
+            if (id3Data && (pes = parsePES(id3Data)))
               parseID3PES(pes);
-
             id3Data = { data: [], size: 0 };
           }
           if (id3Data) {
@@ -220,13 +271,11 @@ class TSDemuxer {
         case 0:
           if (stt)
             offset += data[offset] + 1;
-
           pmtId = this._pmtId = parsePAT(data, offset);
           break;
         case pmtId:
           if (stt)
             offset += data[offset] + 1;
-
           let parsedPIDs = parsePMT(data, offset, this.typeSupported.mpeg === true || this.typeSupported.mp3 === true, this.sampleAes != null);
 
           // only update track id if track PID found while parsing PMT
@@ -238,7 +287,6 @@ class TSDemuxer {
           avcId = parsedPIDs.avc;
           if (avcId > 0)
             avcTrack.pid = avcId;
-
           audioId = parsedPIDs.audio;
           if (audioId > 0) {
             audioTrack.pid = audioId;
@@ -247,12 +295,12 @@ class TSDemuxer {
           id3Id = parsedPIDs.id3;
           if (id3Id > 0)
             id3Track.pid = id3Id;
-
           if (unknownPIDs && !pmtParsed) {
             logger.log('reparse from beginning');
             unknownPIDs = false;
-            // we set it to -188, the += 188 in the for loop will reset start to 0
-            start = syncOffset - 188;
+            // we set it to the start of the first packet of this data chunk
+            start = (start % 188) - 188;
+            i = -188;
           }
           pmtParsed = this.pmtParsed = true;
           break;
@@ -264,9 +312,53 @@ class TSDemuxer {
           break;
         }
       } else {
-        this.observer.trigger(Event.ERROR, { type: ErrorTypes.MEDIA_ERROR, details: ErrorDetails.FRAG_PARSING_ERROR, fatal: false, reason: 'TS packet did not start with 0x47' });
+        this.observer.trigger(Event.ERROR, { type: ErrorTypes.MEDIA_ERROR, details: ErrorDetails.FRAG_PARSING_ERROR, fatal: true, reason: `TS packet did not start with 0x47 @ offset ${i}` });
       }
     }
+
+    // check if there any remaining bytes left
+    let remainingLen = this.len = len - i;
+    // console.log('parsed/trailer:' + i + '/' + remainingLen);
+    if (remainingLen) {
+      if (this.data.length === 0)
+        this.data.push({ start: data.length - remainingLen, data: data });
+    }
+    // update tracks with chunk of partial reassembled PES
+    avcTrack.pesData = avcData;
+    audioTrack.pesData = audioData;
+    id3Track.pesData = id3Data;
+
+    if (lowLatency && !this.isSafari)
+      this.remux();
+  }
+
+  remux () {
+    let avcTrack = this._avcTrack,
+      audioTrack = this._audioTrack,
+      id3Track = this._id3Track;
+
+    if (avcTrack.samples.length > 1 && audioTrack.samples.length > 0) {
+      if (this.sampleAes == null)
+        this.remuxer.remux(audioTrack, avcTrack, id3Track, this._txtTrack, this.timeOffset, this.contiguous, this.accurateTimeOffset, this.lowLatency);
+      else
+        this.decryptAndRemux(audioTrack, avcTrack, id3Track, this._txtTrack, this.timeOffset, this.contiguous, this.accurateTimeOffset, this.lowLatency);
+      this.contiguous = true;
+    }
+  }
+
+  notifycomplete () {
+    let avcTrack = this._avcTrack,
+      audioTrack = this._audioTrack,
+      id3Track = this._id3Track,
+      avcData = avcTrack.pesData,
+      audioData = audioTrack.pesData,
+      id3Data = id3Track.pesData,
+      parsePES = this._parsePES,
+      parseAVCPES = this._parseAVCPES.bind(this),
+      parseAACPES = this._parseAACPES.bind(this),
+      parseMPEGPES = this._parseMPEGPES.bind(this),
+      parseID3PES = this._parseID3PES.bind(this),
+      pes;
     // try to parse last PES packets
     if (avcData && (pes = parsePES(avcData)) && pes.pts !== undefined) {
       parseAVCPES(pes, true);
@@ -299,31 +391,38 @@ class TSDemuxer {
       id3Track.pesData = id3Data;
     }
 
-    if (this.sampleAes == null)
-      this.remuxer.remux(audioTrack, avcTrack, id3Track, this._txtTrack, timeOffset, contiguous, accurateTimeOffset);
-    else
-      this.decryptAndRemux(audioTrack, avcTrack, id3Track, this._txtTrack, timeOffset, contiguous, accurateTimeOffset);
+    if (avcTrack.samples.length > 0 || audioTrack.samples.length > 0) {
+      if (this.sampleAes == null)
+        this.remuxer.remux(audioTrack, avcTrack, id3Track, this._txtTrack, this.timeOffset, this.contiguous, this.accurateTimeOffset, this.lowLatency);
+      else
+        this.decryptAndRemux(audioTrack, avcTrack, id3Track, this._txtTrack, this.timeOffset, this.contiguous, this.accurateTimeOffset, this.lowLatency);
+    }
+    // notify end of parsing
+    this.observer.trigger(Event.FRAG_PARSED);
+    this.data = [];
+    this.len = 0;
+    this.contiguous = true;
   }
 
-  decryptAndRemux (audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset) {
+  decryptAndRemux (audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset, lowLatency) {
     if (audioTrack.samples && audioTrack.isAAC) {
       let localthis = this;
       this.sampleAes.decryptAacSamples(audioTrack.samples, 0, function () {
-        localthis.decryptAndRemuxAvc(audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset);
+        localthis.decryptAndRemuxAvc(audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset, lowLatency);
       });
     } else {
-      this.decryptAndRemuxAvc(audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset);
+      this.decryptAndRemuxAvc(audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset, lowLatency);
     }
   }
 
-  decryptAndRemuxAvc (audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset) {
+  decryptAndRemuxAvc (audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset, lowLatency) {
     if (videoTrack.samples) {
       let localthis = this;
       this.sampleAes.decryptAvcSamples(videoTrack.samples, 0, 0, function () {
-        localthis.remuxer.remux(audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset);
+        localthis.remuxer.remux(audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset, lowLatency);
       });
     } else {
-      this.remuxer.remux(audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset);
+      this.remuxer.remux(audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset, lowLatency);
     }
   }
 

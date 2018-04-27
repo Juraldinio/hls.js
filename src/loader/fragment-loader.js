@@ -30,6 +30,7 @@ class FragmentLoader extends EventHandler {
       type = frag.type,
       loaders = this.loaders,
       config = this.hls.config,
+      progressData = !frag.bitrateTest && this.hls.lowLatencyEnabled,
       FragmentILoader = config.fLoader,
       DefaultILoader = config.loader;
 
@@ -43,11 +44,11 @@ class FragmentLoader extends EventHandler {
     }
 
     loader = loaders[type] = frag.loader =
-      config.fLoader ? new FragmentILoader(config) : new DefaultILoader(config);
+      config.fLoader ? new FragmentILoader(config, progressData) : new DefaultILoader(config, progressData);
 
     let loaderContext, loaderConfig, loaderCallbacks;
 
-    loaderContext = { url: frag.url, frag: frag, responseType: 'arraybuffer', progressData: false };
+    loaderContext = { url: frag.url, frag: frag, responseType: 'arraybuffer', progressData: progressData };
 
     let start = frag.byteRangeStartOffset,
       end = frag.byteRangeEndOffset;
@@ -103,8 +104,7 @@ class FragmentLoader extends EventHandler {
   // data will be used for progressive parsing
   loadprogress (stats, context, data, networkDetails = null) { // jshint ignore:line
     let frag = context.frag;
-    frag.loaded = stats.loaded;
-    this.hls.trigger(Event.FRAG_LOAD_PROGRESS, { frag: frag, stats: stats, networkDetails: networkDetails });
+    this.hls.trigger(Event.FRAG_LOAD_PROGRESS, { frag: frag, stats: stats, payload: data, networkDetails: networkDetails });
   }
 }
 

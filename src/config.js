@@ -6,8 +6,7 @@ import AbrController from './controller/abr-controller';
 import BufferController from './controller/buffer-controller';
 import CapLevelController from './controller/cap-level-controller';
 import FPSController from './controller/fps-controller';
-import XhrLoader from './utils/xhr-loader';
-// import FetchLoader from './utils/fetch-loader';
+import HTTPLoader from './loader/http-loader';
 
 import AudioTrackController from './controller/audio-track-controller';
 import AudioStreamController from './controller/audio-stream-controller';
@@ -62,7 +61,20 @@ export var hlsDefaultConfig = {
   fpsDroppedMonitoringPeriod: 5000, // used by fps-controller
   fpsDroppedMonitoringThreshold: 0.2, // used by fps-controller
   appendErrorMaxRetry: 3, // used by buffer-controller
-  loader: XhrLoader,
+  minLowLatencyBufTime: 2, // used by buffer-controllers
+  maxLowLatencyBufTime: 4, // used by buffer-controller
+  minLowLatencyBufTimeChrome: undefined, // used by buffer-controller
+  maxLowLatencyBufTimeChrome: undefined, // used by buffer-controller
+  minLowLatencyBufTimeFirefox: undefined, // used by buffer-controller
+  maxLowLatencyBufTimeFirefox: undefined, // used by buffer-controller
+  minLowLatencyBufTimeEdge: undefined, // used by buffer-controller
+  maxLowLatencyBufTimeEdge: undefined, // used by buffer-controller
+  minLowLatencyBufTimeIE: undefined, // used by buffer-controller
+  maxLowLatencyBufTimeIE: undefined, // used by buffer-controller
+  isHighBandwidth: false, // used by buffer-controller
+  bufferTimeRange: 0.2, // used by buffer-controller
+  acceleratedPlaybackRate: 0.1, // used by buffer-controller
+  loader: HTTPLoader,
   // loader: FetchLoader,
   fLoader: undefined, // used by fragment-loader
   pLoader: undefined, // used by playlist-loader

@@ -39,6 +39,7 @@ class StreamController extends TaskLoop {
       Event.MANIFEST_PARSED,
       Event.LEVEL_LOADED,
       Event.KEY_LOADED,
+      Event.FRAG_LOAD_PROGRESS,
       Event.FRAG_LOADED,
       Event.FRAG_LOAD_EMERGENCY_ABORTED,
       Event.FRAG_PARSING_INIT_SEGMENT,
@@ -512,6 +513,7 @@ class StreamController extends TaskLoop {
 
       this.fragCurrent = frag;
       this.startFragRequested = true;
+      this.pendingAppending = 0;
       // Don't update nextLoadPosition for fragments which are not buffered
       if (!isNaN(frag.sn) && !frag.bitrateTest)
         this.nextLoadPosition = frag.start + frag.duration;
@@ -945,10 +947,18 @@ class StreamController extends TaskLoop {
     }
   }
 
+  onFragLoadProgress (data) {
+    this.processFragChunk(data, false);
+  }
+
   onFragLoaded (data) {
+    this.processFragChunk(data, true);
+  }
+
+  processFragChunk (data, notifycomplete) {
     let fragCurrent = this.fragCurrent,
       fragLoaded = data.frag;
-    if (this.state === State.FRAG_LOADING &&
+    if ((this.state === State.FRAG_LOADING || this.state === State.PARSING) &&
         fragCurrent &&
         fragLoaded.type === 'main' &&
         fragLoaded.level === fragCurrent.level &&
@@ -956,7 +966,10 @@ class StreamController extends TaskLoop {
       let stats = data.stats,
         currentLevel = this.levels[fragCurrent.level],
         details = currentLevel.details;
-      logger.log(`Loaded  ${fragCurrent.sn} of [${details.startSN} ,${details.endSN}],level ${fragCurrent.level}`);
+      if (notifycomplete) {
+        logger.log(`Loaded  ${fragCurrent.sn} of [${details.startSN} ,${details.endSN}],level ${fragCurrent.level}`);
+        this.fragLoadError = 0;
+      }
       // reset frag bitrate test in any case after frag loaded event
       this.bitrateTest = false;
       this.stats = stats;
@@ -976,7 +989,6 @@ class StreamController extends TaskLoop {
         this.hls.trigger(Event.FRAG_BUFFERED, { stats: stats, frag: fragCurrent, id: 'main' });
         this.tick();
       } else {
-        this.state = State.PARSING;
         // transmux the MPEG-TS data to ISO-BMFF segments
         let duration = details.totalduration,
           level = fragCurrent.level,
@@ -994,22 +1006,27 @@ class StreamController extends TaskLoop {
               audioCodec = 'mp4a.40.5';
           }
         }
-        this.pendingBuffering = true;
-        this.appended = false;
-        logger.log(`Parsing ${sn} of [${details.startSN} ,${details.endSN}],level ${level}, cc ${fragCurrent.cc}`);
+        if (this.state !== State.PARSING) {
+          this.state = State.PARSING;
+          this.pendingBuffering = true;
+          this.appended = false;
+          logger.log(`Parsing ${sn} of [${details.startSN} ,${details.endSN}],level ${level}, cc ${fragCurrent.cc}`);
+        }
         let demuxer = this.demuxer;
         if (!demuxer)
           demuxer = this.demuxer = new Demuxer(this.hls, 'main');
-
-        // time Offset is accurate if level PTS is known, or if playlist is not sliding (not live) and if media is not seeking (this is to overcome potential timestamp drifts between playlists and fragments)
-        let media = this.media;
-        let mediaSeeking = media && media.seeking;
-        let accurateTimeOffset = !mediaSeeking && (details.PTSKnown || !details.live);
-        let initSegmentData = details.initSegment ? details.initSegment.data : [];
-        demuxer.push(data.payload, initSegmentData, audioCodec, currentLevel.videoCodec, fragCurrent, duration, accurateTimeOffset, undefined);
+        if (data.payload) {
+          // time Offset is accurate if level PTS is known, or if playlist is not sliding (not live) and if media is not seeking (this is to overcome potential timestamp drifts between playlists and fragments)
+          let media = this.media;
+          let mediaSeeking = media && media.seeking;
+          let accurateTimeOffset = !mediaSeeking && (details.PTSKnown || !details.live);
+          let initSegmentData = details.initSegment ? details.initSegment.data : [];
+          demuxer.append(data.payload, initSegmentData, audioCodec, currentLevel.videoCodec, fragCurrent, duration, accurateTimeOffset, undefined, this.hls.lowLatencyEnabled);
+        }
+        if (notifycomplete)
+          demuxer.notifycomplete();
       }
     }
-    this.fragLoadError = 0;
   }
 
   onFragParsingInitSegment (data) {
@@ -1487,7 +1504,19 @@ class StreamController extends TaskLoop {
   }
 
   computeLivePosition (sliding, levelDetails) {
-    let targetLatency = this.config.liveSyncDuration !== undefined ? this.config.liveSyncDuration : this.config.liveSyncDurationCount * levelDetails.targetduration;
+    var inProgressDuration = 0;
+    let frags = levelDetails.fragments;
+    if (this.hls.lowLatencyEnabled) {
+      for (var i = frags.length; i-- > 0;) {
+        let frag = frags[i];
+        if (frag.inProgress)
+          inProgressDuration += frag.duration;
+        else
+          break;
+      }
+    }
+
+    let targetLatency = inProgressDuration > 0 ? inProgressDuration : this.config.liveSyncDuration !== undefined ? this.config.liveSyncDuration : this.config.liveSyncDurationCount * levelDetails.targetduration;
     return sliding + Math.max(0, levelDetails.totalduration - targetLatency);
   }
 

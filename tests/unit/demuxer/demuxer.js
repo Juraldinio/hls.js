@@ -117,7 +117,7 @@ describe('Demuxer tests', function () {
       assert.equal(obj2[0], data, 'ArrayBuffer');
     });
 
-    demux.push(data, initSegment, audioCodec, videoCodec, newFrag, duration, accurateTimeOffset, defaultInitPTS);
+    demux.append(data, initSegment, audioCodec, videoCodec, newFrag, duration, accurateTimeOffset, defaultInitPTS, false);
 
     assert.ok(stub.calledOnce, 'postMessage called once');
   });
@@ -154,7 +154,7 @@ describe('Demuxer tests', function () {
       accurateTimeOffset = {},
       defaultInitPTS = {};
 
-    let stub = sinon.stub(demux.demuxer, 'push').callsFake(function (obj1, obj2, obj3, obj4, obj5, obj6, obj7, obj8, obj9, obj10, obj11, obj12, obj13) {
+    let stub = sinon.stub(demux.demuxer, 'append').callsFake(function (obj1, obj2, obj3, obj4, obj5, obj6, obj7, obj8, obj9, obj10, obj11, obj12, obj13) {
       assert.equal(obj1, data);
       assert.equal(obj2, newFrag.decryptdata);
       assert.equal(obj3, initSegment);
@@ -169,7 +169,7 @@ describe('Demuxer tests', function () {
       assert.equal(obj12, defaultInitPTS);
     });
 
-    demux.push(data, initSegment, audioCodec, videoCodec, newFrag, duration, accurateTimeOffset, defaultInitPTS);
+    demux.append(data, initSegment, audioCodec, videoCodec, newFrag, duration, accurateTimeOffset, defaultInitPTS, false);
 
     assert.ok(stub.calledWith(data, newFrag.decryptdata, initSegment, audioCodec, videoCodec, newFrag.start, true, true, false, duration, accurateTimeOffset, defaultInitPTS));
   });

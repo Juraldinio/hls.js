@@ -166,7 +166,7 @@ class AbrController extends EventHandler {
       // in case we use config.startFragPrefetch while media is not attached yet, fragment might be parsed while media not attached yet, but it will only be buffered on media attached
       // as a consequence it could happen really late in the process. meaning that appending duration might appears huge ... leading to underestimated throughput estimation
       let fragLoadingProcessingMs = stats.tparsed - stats.trequest;
-      logger.log(`latency/loading/parsing/append/kbps:${Math.round(stats.tfirst - stats.trequest)}/${Math.round(stats.tload - stats.tfirst)}/${Math.round(stats.tparsed - stats.tload)}/${Math.round(stats.tbuffered - stats.tparsed)}/${Math.round(8 * stats.loaded / (stats.tbuffered - stats.trequest))}`);
+      logger.log(`latency/loading/parsing/append/chunks/avg chunk/kbps:${Math.round(stats.tfirst - stats.trequest)}/${Math.round(stats.tload - stats.tfirst)}/${Math.round(stats.tparsed - stats.tload)}/${Math.round(stats.tbuffered - stats.tparsed)}/${stats.chunks}/${Math.round(stats.loaded / stats.chunks)}/${Math.round(8 * stats.loaded / (stats.tbuffered - stats.trequest))}`);
       this._bwEstimator.sample(fragLoadingProcessingMs, stats.loaded);
       stats.bwEstimate = this._bwEstimator.getEstimate();
       // if fragment has been loaded to perform a bitrate test, (hls.startLevel = -1), store bitrate test delay duration

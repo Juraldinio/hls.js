@@ -108,6 +108,7 @@ export default class Hls {
     enableLogs(config.debug);
     this.config = config;
     this._autoLevelCapping = -1;
+    this._enableLowLatency = false;
     // observer setup
     let observer = this.observer = new EventEmitter();
     observer.trigger = function trigger (event, ...data) {
@@ -238,6 +239,7 @@ export default class Hls {
     this.url = null;
     this.observer.removeAllListeners();
     this._autoLevelCapping = -1;
+    this._enableLowLatency = false;
   }
 
   /**
@@ -458,10 +460,18 @@ export default class Hls {
     this._autoLevelCapping = newLevel;
   }
 
-  /**
-   * True when automatic level selection enabled
-   * @type {boolean}
-   */
+  /** check if we are in low latency mode **/
+  get lowLatencyEnabled () {
+    return this._enableLowLatency;
+  }
+
+  /** set using low latency mode */
+  set lowLatencyEnabled (enabled) {
+    logger.log(`set lowLatencyEnabled:${enabled}`);
+    this._enableLowLatency = enabled;
+  }
+
+  /* check if we are in automatic level selection mode */
   get autoLevelEnabled () {
     return (this.levelController.manualLevel === -1);
   }

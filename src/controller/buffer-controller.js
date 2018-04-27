@@ -10,6 +10,12 @@ import { getMediaSource } from '../helper/mediasource-helper';
 
 const MediaSource = getMediaSource();
 
+const BufferingTimeAdjustState = {
+  NONE: 'NONE',
+  INPROGRESS: 'INPROGRESS',
+  COMPLETED: 'COMPLETED'
+};
+
 class BufferController extends EventHandler {
   constructor (hls) {
     super(hls,
@@ -39,6 +45,37 @@ class BufferController extends EventHandler {
     this.onsbe = this.onSBUpdateError.bind(this);
     this.pendingTracks = {};
     this.tracks = {};
+
+    this.minLowLatencyBufTime = hls.config.minLowLatencyBufTime;
+    this.maxLowLatencyBufTime = hls.config.maxLowLatencyBufTime;
+    if (typeof navigator !== 'undefined') {
+      const ua = navigator.userAgent.toLowerCase();
+      if (ua.indexOf('firefox') > -1) {
+        this.isFirefox = true;
+        if (typeof hls.config.minLowLatencyBufTimeFirefox !== 'undefined')
+          this.minLowLatencyBufTime = hls.config.minLowLatencyBufTimeFirefox;
+        if (typeof hls.config.maxLowLatencyBufTimeFirefox !== 'undefined')
+          this.maxLowLatencyBufTime = hls.config.maxLowLatencyBufTimeFirefox;
+      } else if (ua.indexOf('edge') > -1) {
+        this.isEdge = true;
+        if (typeof hls.config.minLowLatencyBufTimeEdge !== 'undefined')
+          this.minLowLatencyBufTime = hls.config.minLowLatencyBufTimeEdge;
+        if (typeof hls.config.maxLowLatencyBufTimeEdge !== 'undefined')
+          this.maxLowLatencyBufTime = hls.config.maxLowLatencyBufTimeEdge;
+      } else if (ua.indexOf('msie') > -1 || ua.indexOf('trident') > -1) {
+        this.isIE = true;
+        if (typeof hls.config.minLowLatencyBufTimeIE !== 'undefined')
+          this.minLowLatencyBufTime = hls.config.minLowLatencyBufTimeIE;
+        if (typeof hls.config.maxLowLatencyBufTimeIE !== 'undefined')
+          this.maxLowLatencyBufTime = hls.config.maxLowLatencyBufTimeIE;
+      } else if (ua.indexOf('chrome') > -1) {
+        this.isChrome = true;
+        if (typeof hls.config.minLowLatencyBufTimeChrome !== 'undefined')
+          this.minLowLatencyBufTime = hls.config.minLowLatencyBufTimeChrome;
+        if (typeof hls.config.maxLowLatencyBufTimeChrome !== 'undefined')
+          this.maxLowLatencyBufTime = hls.config.maxLowLatencyBufTimeChrome;
+      }
+    }
   }
 
   destroy () {
@@ -137,6 +174,7 @@ class BufferController extends EventHandler {
       // Detach properly the MediaSource from the HTMLMediaElement as
       // suggested in https://github.com/w3c/media-source/issues/53.
       if (this.media) {
+        this.media.removeEventListener('canplay', this.onmcp);
         URL.revokeObjectURL(this._objectUrl);
 
         // clean up video tag src only if it's our own url. some external libraries might
@@ -158,6 +196,8 @@ class BufferController extends EventHandler {
       this.flushRange = [];
       this.segments = [];
       this.appended = 0;
+      this.seeked = false;
+      this.bufferingTimeAdjustState = BufferingTimeAdjustState.NONE;
     }
     this.onmso = this.onmse = this.onmsc = null;
     this.hls.trigger(Event.MEDIA_DETACHED);
@@ -256,6 +296,8 @@ class BufferController extends EventHandler {
     this.flushRange = [];
     this.segments = [];
     this.appended = 0;
+    this.seeked = false;
+    this.bufferingTimeAdjustState = BufferingTimeAdjustState.NONE;
   }
 
   onBufferCodecs (tracks) {
@@ -414,6 +456,69 @@ class BufferController extends EventHandler {
       logger.log(`Updating Media Source duration to ${this._levelDuration.toFixed(3)}`);
       this._msDuration = this.mediaSource.duration = this._levelDuration;
     }
+
+    if (this.hls.lowLatencyEnabled && this.media.buffered.length > 0 && this.media.played.length > 0) {
+      const isHighBandwidth = config.isHighBandwidth;
+      const targetBufferTime = isHighBandwidth ? this.minLowLatencyBufTime : this.maxLowLatencyBufTime;
+
+      const bufEnd = this.media.buffered.end(this.media.buffered.length - 1);
+      const playedEnd = this.media.played.end(this.media.played.length - 1);
+      const bufferingTime = bufEnd - playedEnd;
+      const delay = bufferingTime - targetBufferTime;
+      if (!this.isChrome && !this.seeked && delay > 0) {
+        this.media.currentTime += delay;
+        this.seeked = true;
+      } else if (!this.isIE && !this.isEdge) {
+        const bufferTimeRange = config.bufferTimeRange;
+        const acceleratedPlaybackRate = config.acceleratedPlaybackRate;
+        const halfBufferTimeRange = bufferTimeRange / 2;
+
+        switch (this.bufferingTimeAdjustState) {
+        case BufferingTimeAdjustState.NONE:
+          if (bufferingTime < targetBufferTime - halfBufferTimeRange) {
+            this.media.playbackRate = 1 - acceleratedPlaybackRate;
+            logger.log(`changed playbackRate to ${this.media.playbackRate}`);
+            this.bufferingTimeAdjustState = BufferingTimeAdjustState.INPROGRESS;
+          } else if (bufferingTime > targetBufferTime + halfBufferTimeRange) {
+            this.media.playbackRate = 1 + acceleratedPlaybackRate;
+            logger.log(`changed playbackRate to ${this.media.playbackRate}`);
+            this.bufferingTimeAdjustState = BufferingTimeAdjustState.INPROGRESS;
+          } else {
+            this.bufferingTimeAdjustState = BufferingTimeAdjustState.COMPLETED;
+          }
+          break;
+        case BufferingTimeAdjustState.INPROGRESS: {
+          const droppedFrames = this.getDroppedFrames();
+          // If some frames are dropped at faster rate, there may be a cpu load issue, so stop adjusting buffer time
+          const stallAndFastPlayback = droppedFrames > 0 && this.media.playbackRate > 1;
+          // When reached target buffer time, stop adjusting buffer time
+          const reachedTargetWithSlowPlayback = this.media.playbackRate < 1 && bufferingTime > targetBufferTime - halfBufferTimeRange;
+          const reachedTargetWithFastPlayback = this.media.playbackRate > 1 && bufferingTime < targetBufferTime + halfBufferTimeRange;
+          const adjustingStopCond = stallAndFastPlayback || reachedTargetWithSlowPlayback || reachedTargetWithFastPlayback;
+          if (adjustingStopCond) {
+            this.media.playbackRate = 1;
+            logger.log(`changed playbackRate to ${this.media.playbackRate}`);
+            this.bufferingTimeAdjustState = BufferingTimeAdjustState.COMPLETED;
+          }
+          break;
+        }
+        case BufferingTimeAdjustState.COMPLETED:
+          break;
+        default:
+          break;
+        }
+      }
+    }
+  }
+
+  getDroppedFrames () {
+    const v = this.media;
+    let videoPlaybackQuality = v.getVideoPlaybackQuality;
+    if (videoPlaybackQuality && typeof (videoPlaybackQuality) === typeof (Function))
+      return v.getVideoPlaybackQuality().droppedVideoFrames;
+    else if (v.webkitDroppedFrameCount)
+      return v.webkitDroppedFrameCount;
+    return 0;
   }
 
   doFlush () {

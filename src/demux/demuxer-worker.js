@@ -39,7 +39,10 @@ let DemuxerWorker = function (self) {
       forwardMessage('init', null);
       break;
     case 'demux':
-      self.demuxer.push(data.data, data.decryptdata, data.initSegment, data.audioCodec, data.videoCodec, data.timeOffset, data.discontinuity, data.trackSwitch, data.contiguous, data.duration, data.accurateTimeOffset, data.defaultInitPTS);
+      self.demuxer.append(data.data, data.decryptdata, data.initSegment, data.audioCodec, data.videoCodec, data.timeOffset, data.discontinuity, data.trackSwitch, data.contiguous, data.duration, data.accurateTimeOffset, data.defaultInitPTS, data.lowLatency);
+      break;
+    case 'complete':
+      self.demuxer.notifycomplete();
       break;
     default:
       break;

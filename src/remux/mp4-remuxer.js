@@ -32,7 +32,7 @@ class MP4Remuxer {
     this.ISGenerated = false;
   }
 
-  remux (audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset) {
+  remux (audioTrack, videoTrack, id3Track, textTrack, timeOffset, contiguous, accurateTimeOffset, lowLatency) {
     // generate Init Segment if needed
     if (!this.ISGenerated)
       this.generateIS(audioTrack, videoTrack, timeOffset);
@@ -72,7 +72,7 @@ class MP4Remuxer {
             logger.warn('regenerate InitSegment as video detected');
             this.generateIS(audioTrack, videoTrack, timeOffset);
           }
-          this.remuxVideo(videoTrack, videoTimeOffset, contiguous, audioTrackLength, accurateTimeOffset);
+          this.remuxVideo(videoTrack, videoTimeOffset, contiguous, audioTrackLength, accurateTimeOffset, lowLatency);
         }
       } else {
         // logger.log('nb AVC samples:' + videoTrack.samples.length);
@@ -90,9 +90,6 @@ class MP4Remuxer {
     // logger.log('nb ID3 samples:' + audioTrack.samples.length);
     if (textTrack.samples.length)
       this.remuxText(textTrack, timeOffset);
-
-    // notify end of parsing
-    this.observer.trigger(Event.FRAG_PARSED);
   }
 
   generateIS (audioTrack, videoTrack, timeOffset) {
@@ -171,7 +168,7 @@ class MP4Remuxer {
     }
   }
 
-  remuxVideo (track, timeOffset, contiguous, audioTrackLength, accurateTimeOffset) {
+  remuxVideo (track, timeOffset, contiguous, audioTrackLength, accurateTimeOffset, lowLatency) {
     let offset = 8,
       timeScale = track.timescale,
       mp4SampleDuration,
@@ -181,6 +178,7 @@ class MP4Remuxer {
       lastPTS, lastDTS,
       inputSamples = track.samples,
       outputSamples = [],
+      deferSamples = [],
       nbSamples = inputSamples.length,
       ptsNormalize = this._PTSNormalize,
       initDTS = this._initDTS;
@@ -227,6 +225,8 @@ class MP4Remuxer {
     // PTS is coded on 33bits, and can loop from -2^32 to 2^32
     // ptsNormalize will make PTS/DTS value monotonic, we use last known DTS value as reference value
     inputSamples.forEach(function (sample) {
+      sample.ptsOrg = sample.pts;
+      sample.dtsOrg = sample.dts;
       sample.pts = ptsNormalize(sample.pts - initDTS, nextAvcDts);
       sample.dts = ptsNormalize(sample.dts - initDTS, nextAvcDts);
     });
@@ -254,7 +254,7 @@ class MP4Remuxer {
     // check timestamp continuity accross consecutive fragments (this is to remove inter-fragment gap/hole)
     let delta = Math.round((firstDTS - nextAvcDts) / 90);
     // if fragment are contiguous, detect hole/overlapping between fragments
-    if (contiguous) {
+    if (!lowLatency && contiguous) {
       if (delta) {
         if (delta > 1)
           logger.log(`AVC:${delta} ms hole between fragments detected,filling it`);
@@ -341,6 +341,15 @@ class MP4Remuxer {
         if (i < nbSamples - 1) {
           mp4SampleDuration = inputSamples[i + 1].dts - avcSample.dts;
         } else {
+          if (lowLatency) {
+            avcSample.pts = avcSample.ptsOrg;
+            avcSample.dts = avcSample.dtsOrg;
+            deferSamples.push(avcSample);
+            sample = inputSamples[i > 0 ? i - 1 : i];
+            lastDTS = Math.max(sample.dts, 0);
+            lastPTS = Math.max(sample.pts, 0, lastDTS);
+            continue;
+          }
           let config = this.config,
             lastFrameDuration = avcSample.dts - inputSamples[i > 0 ? i - 1 : i].dts;
           if (config.stretchShortVideoTrack) {
@@ -403,7 +412,7 @@ class MP4Remuxer {
     }
     track.samples = outputSamples;
     moof = MP4.moof(track.sequenceNumber++, firstDTS, track);
-    track.samples = [];
+    track.samples = deferSamples;
 
     let data = {
       data1: moof,

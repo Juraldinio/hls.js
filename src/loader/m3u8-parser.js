@@ -25,7 +25,7 @@ const LEVEL_PLAYLIST_REGEX_FAST = new RegExp([
   /|#.*/.source // All other non-segment oriented tags will match with all groups empty
 ].join(''), 'g');
 
-const LEVEL_PLAYLIST_REGEX_SLOW = /(?:(?:#(EXTM3U))|(?:#EXT-X-(PLAYLIST-TYPE):(.+))|(?:#EXT-X-(MEDIA-SEQUENCE): *(\d+))|(?:#EXT-X-(TARGETDURATION): *(\d+))|(?:#EXT-X-(KEY):(.+))|(?:#EXT-X-(START):(.+))|(?:#EXT-X-(ENDLIST))|(?:#EXT-X-(DISCONTINUITY-SEQ)UENCE:(\d+))|(?:#EXT-X-(DIS)CONTINUITY))|(?:#EXT-X-(VERSION):(\d+))|(?:#EXT-X-(MAP):(.+))|(?:(#)(.*):(.*))|(?:(#)(.*))(?:.*)\r?\n?/;
+const LEVEL_PLAYLIST_REGEX_SLOW = /(?:(?:#(EXTM3U))|(?:#EXT-X-(PLAYLIST-TYPE):(.+))|(?:#EXT-X-(MEDIA-SEQUENCE): *(\d+))|(?:#EXT-X-(TARGETDURATION): *(\d+))|(?:#EXT-X-(KEY):(.+))|(?:#EXT-X-(START):(.+))|(?:#EXT-X-(ENDLIST))|(?:#EXT-X-(DISCONTINUITY-SEQ)UENCE:(\d+))|(?:#EXT-X-(DIS)CONTINUITY))|(?:#EXT-X-(VERSION):(\d+))|(?:#EXT-X-(MAP):(.+))|(?:#EXT-X-(FRESH-IS-COMING))|(?:(#)(.*):(.*))|(?:(#)(.*))(?:.*)\r?\n?/;
 
 export default class M3U8Parser {
   static findGroup (groups, mediaGroupId) {
@@ -281,6 +281,9 @@ export default class M3U8Parser {
           frag.sn = 'initSegment';
           level.initSegment = frag;
           frag = new Fragment();
+          break;
+        case 'FRESH-IS-COMING':
+          frag.inProgress = true;
           break;
         default:
           logger.warn(`line parsed but not handled: ${result}`);

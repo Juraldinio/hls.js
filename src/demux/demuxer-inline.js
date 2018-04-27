@@ -18,6 +18,8 @@ class DemuxerInline {
     this.typeSupported = typeSupported;
     this.config = config;
     this.vendor = vendor;
+    this.fnqueue = [];
+    this.lock = false;
   }
 
   destroy () {
@@ -26,7 +28,29 @@ class DemuxerInline {
       demuxer.destroy();
   }
 
-  push (data, decryptdata, initSegment, audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS) {
+  synccall (fn, params) {
+    let localthis = this;
+    this.fnqueue.push(function () {
+      fn.apply(localthis, params);
+    });
+    if (!this.lock)
+      this.next();
+  }
+
+  next () {
+    if (this.fnqueue.length > 0) {
+      this.lock = true;
+      (this.fnqueue.shift())();
+    } else {
+      this.lock = false;
+    }
+  }
+
+  append (data, decryptdata, initSegment, audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS, lowLatency) {
+    this.synccall(this.appendTask, [data, decryptdata, initSegment, audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS, lowLatency]);
+  }
+
+  appendTask (data, decryptdata, initSegment, audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS, lowLatency) {
     if ((data.byteLength > 0) && (decryptdata != null) && (decryptdata.key != null) && (decryptdata.method === 'AES-128')) {
       let decrypter = this.decrypter;
       if (decrypter == null)
@@ -48,14 +72,16 @@ class DemuxerInline {
           endTime = Date.now();
         }
         localthis.observer.trigger(Event.FRAG_DECRYPTED, { stats: { tstart: startTime, tdecrypt: endTime } });
-        localthis.pushDecrypted(new Uint8Array(decryptedData), decryptdata, new Uint8Array(initSegment), audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS);
+        localthis.appendDecrypted(new Uint8Array(decryptedData), decryptdata, new Uint8Array(initSegment), audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS, lowLatency);
+        localthis.next();
       });
     } else {
-      this.pushDecrypted(new Uint8Array(data), decryptdata, new Uint8Array(initSegment), audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS);
+      this.appendDecrypted(new Uint8Array(data), decryptdata, new Uint8Array(initSegment), audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS, lowLatency);
+      this.next();
     }
   }
 
-  pushDecrypted (data, decryptdata, initSegment, audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS) {
+  appendDecrypted (data, decryptdata, initSegment, audioCodec, videoCodec, timeOffset, discontinuity, trackSwitch, contiguous, duration, accurateTimeOffset, defaultInitPTS, lowLatency) {
     let demuxer = this.demuxer;
     if (!demuxer ||
       // in case of continuity change, or track switch
@@ -79,7 +105,7 @@ class DemuxerInline {
         const probe = mux.demux.probe;
         if (probe(data)) {
           const remuxer = this.remuxer = new mux.remux(observer, config, typeSupported, this.vendor);
-          demuxer = new mux.demux(observer, remuxer, config, typeSupported);
+          demuxer = new mux.demux(observer, remuxer, config, typeSupported, this.vendor);
           this.probe = probe;
           break;
         }
@@ -103,7 +129,18 @@ class DemuxerInline {
     if (typeof demuxer.setDecryptData === 'function')
       demuxer.setDecryptData(decryptdata);
 
-    demuxer.append(data, timeOffset, contiguous, accurateTimeOffset);
+    demuxer.append(data, timeOffset, contiguous, accurateTimeOffset, lowLatency);
+  }
+
+  notifycomplete () {
+    this.synccall(this.notifycompleteTask, []);
+  }
+
+  notifycompleteTask () {
+    let demuxer = this.demuxer;
+    if (demuxer)
+      demuxer.notifycomplete();
+    this.next();
   }
 }
 
